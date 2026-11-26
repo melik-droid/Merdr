@@ -1,0 +1,8 @@
+{
+  "place": "none",
+  "title": "Merdr status",
+  "cloned_from": {
+    "name": "workspace-status",
+    "version": "0.1.18"
+  }
+}

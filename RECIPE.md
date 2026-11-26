@@ -18,7 +18,7 @@ Top to bottom, no outline around any island:
   space's avatar color washes the ground from the left edge: strongest 150px in
   (30% light, 42% dark), gone at 460px.
 - **Body**, 6px side padding, 6px between islands:
-  - **Sidebar, 262px** (resizing off, min 44, max 480): the **Spaces** island,
+  - **Sidebar, 262px** (resizing off, min 0, max 480): the **Spaces** island,
     then the **Agents** island over a 37px "Add machine" footer. 10px corners.
   - **Tab bar island** (`tabs`, 44px, `surface`, 10px corners): tabs and `+`.
   - **Pane islands**, 6px below it and 6px apart: every pane, also a lone one,
@@ -68,17 +68,35 @@ ground. The 16 terminal colors are in the theme files as well.
   or dialog keeps the keyboard, but moving across the panes behind it still
   changes which one is focused.
 - **New panes**: a pane's header fades in over 220ms when a pane appears.
-- **Sidebar**: `cmd-b` (and the sidebar button) slides both islands 24px left
-  while fading them out over 160ms, then hides the column; opening runs it in
-  reverse.
+- **Sidebar**: `cmd-b` (and the sidebar button) narrows the column from 262px
+  to nothing in 260ms, eased both ends, a `layout.resize` every frame, so the
+  tab bar and terminals grow into its place; then it hides and its width is put
+  back. Both islands keep their full width, pinned to the column's right edge
+  (shared `merdr.sidebar.slide`), so they leave under the window's edge
+  together. Opening runs it in reverse. A press while it is closing turns it
+  round where it is. The terminals resize with every frame, as when a divider is
+  dragged.
+- **New tab** (`cmd-t`): the tab slides in 18px from the left and fades in over
+  260ms, and the selection springs across to it.
+- **New rows**: a space or agent that appears grows to its height in 220ms,
+  pushing the rows below, while it slides in 16px from the left and fades in
+  (260ms after 60ms). Nothing animates when the list first loads.
+- **Folding**: an agent group's rows sit in a box whose height closes and opens
+  in 220ms.
 - **Notifications**: every Herdr notification (an agent finished or needs you,
   and anything that calls `notify()`) shows as a rounded note in the corner and
   is kept in the inbox (at most 50, newest first). The bell shows how many
   arrived since the list was last opened (`9+` above nine). Clicking the bell
-  opens a 320 × 380 list: a colored dot by level, title, body, age (`now`,
-  `5m`, `2h`, `1d`). Opening it marks everything seen; clicking a row runs its
-  action (for an agent: go to it); **Clear** empties it. Clicking the corner
-  note runs its action too.
+  opens a 340 × 420 list: **All** / **Needs you** filters (the second counts
+  and shows the agents waiting right now, the newest note of each); notes grouped by space (read
+  from an agent note's "space / tab" body, others under "Other"), newest first,
+  each with a level dot, title, tab and age (`now`, `5m`, `2h`, `1d`). Those that
+  arrived since the last look are tinted. Opening it marks everything seen. On
+  the pointed row the age gives way to "Go →" and "×": clicking the row runs its
+  action (for an agent: go to it), × removes that note; **Clear all** empties
+  it. A note whose terminal has closed is dimmed, marked "closed", and has no
+  "Go →". The corner note shows "Go →"
+  when it has an action, and clicking it runs it.
 
 ## Built from
 
@@ -100,8 +118,8 @@ ground. The 16 terminal colors are in the theme files as well.
   - `merdr-pane-header`: the pane island's header.
   - `merdr-toast`: a clone of Herdr's `toast` drawn as an island; records each
     note in shared `merdr.inbox`.
-  - `merdr-inbox`: the bell's popup (overlay 320 × 380).
-- Shared state: `merdr.pane.rects`, `merdr.inbox`, `merdr.inbox.seen`, `merdr.sidebar.out`.
+  - `merdr-inbox`: the bell's popup (overlay 340 × 420).
+- Shared state: `merdr.pane.rects`, `merdr.inbox`, `merdr.inbox.seen`, `merdr.sidebar.slide`.
 - `keys.json`: `layout:merdr` → `cmd-b`: `merdr-tabs.sidebar` (the animated toggle).
 - Programs: none of Merdr's own. `merdr-spaces` keeps the shipped Spaces code,
   which runs `git` for branch names and `hc` for the machine list, as Herdr's
@@ -127,8 +145,12 @@ ground. The 16 terminal colors are in the theme files as well.
   turns opaque there. So the root has no `background`: `body` and `status`
   paint `canvas` themselves, and `merdr-toolbar` paints its own ground as one
   layer of strips, the color already mixed in (`washStrips`). Keep fills off the
-  frost.
+  frost. Make the strips narrow (1.5 / zoom px): 10px ones show as bands.
 - A mod's `.bg()` takes a color, not a gradient, hence the strips.
+- Herdr ignores `left`/`right` on a mod's outermost element: the sidebar
+  islands are the children of a still box.
+- A narrowing sidebar must not switch the sidebar mods to their rail look: they
+  check `merdr.sidebar.slide`.
 - Adding Merdr means copying `themes/merdr-light.json` and `themes/merdr-dark.json`
   into the app home's `themes/` too (the layout names them); `install.sh` does
   this. Picking another theme in the theme picker overrides them.

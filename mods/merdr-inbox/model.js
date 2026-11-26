@@ -71,12 +71,14 @@ export function washStrips(ground, color, peak, { width = 460, top = 150, step =
   const over = [1, 3, 5].map((i) => channel(color, i));
   const base = ground.length === 9 ? channel(ground, 7) / 255 : 1;
   const byte = (v) => Math.round(v).toString(16).padStart(2, "0");
-  return Array.from({ length: Math.ceil(width / step) }, (_, n) => {
-    const x = (n + 0.5) * step;
+  const count = Math.ceil(width / step - 1e-9);
+  return Array.from({ length: count }, (_, n) => {
+    const size = n < count - 1 ? step : width - step * (count - 1);
+    const x = n * step + size / 2;
     const at = peak * Math.max(0, x <= top ? x / top : (width - x) / (width - top));
     const alpha = at + base * (1 - at);
     const mixed = under.map((u, i) => (over[i] * at + u * base * (1 - at)) / alpha);
-    return { width: step, color: "#" + mixed.map(byte).join("") + byte(alpha * 255) };
+    return { width: size, color: "#" + mixed.map(byte).join("") + byte(alpha * 255) };
   });
 }
 
@@ -92,4 +94,59 @@ export function paneUnder(rects, ids, point) {
     if (!found || r.y > rects[found].y) found = id;
   }
   return found;
+}
+
+// Which rows of a list have just appeared? `known` is what the caller has already
+// seen settle (null until the list first has rows: nothing animates on start).
+// A row stays fresh until the caller adds it to `known`; one that left is
+// forgotten.
+export function arrivals(known, ids) {
+  if (!known) return { known: ids.length ? new Set(ids) : null, fresh: [] };
+  return { known: new Set(ids.filter((id) => known.has(id))), fresh: ids.filter((id) => !known.has(id)) };
+}
+
+// The sidebar's width on its way from one value to another, at progress p (0..1),
+// eased at both ends (cubic), in whole pixels.
+export function slideWidth(from, to, p) {
+  const t = Math.min(1, Math.max(0, p));
+  const eased = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+  return Math.round(from + (to - from) * eased);
+}
+
+// Where a note comes from. Herdr's agent notes carry "space / tab" as their body;
+// anything else is grouped under "Other" with its body as the detail.
+export function noteWhere(note) {
+  const place = note.action?.name === "agent.focus" ? /^(.+) \/ (.+)$/.exec(note.body ?? "") : null;
+  if (!place) return { group: "Other", detail: note.body ?? "" };
+  return { group: place[1], detail: /^\d+$/.test(place[2]) ? `tab ${place[2]}` : place[2] };
+}
+
+// The inbox as groups, one per space, in the order of their newest note.
+export function inboxGroups(list) {
+  const groups = new Map();
+  for (const e of Array.isArray(list) ? list : []) {
+    const name = noteWhere(e).group;
+    if (!groups.has(name)) groups.set(name, { name, items: [] });
+    groups.get(name).items.push(e);
+  }
+  return [...groups.values()];
+}
+
+const terminalOf = (note) => (note.action?.name === "agent.focus" ? note.action.args?.terminal : null);
+
+// What needs the person now: the newest note of each agent that is waiting at
+// this moment. An old "needs you" for an agent since answered or closed doesn't.
+export function needsYou(list, agents) {
+  const waiting = new Set((agents ?? []).filter((a) => a.status === "blocked").map((a) => a.address));
+  return (Array.isArray(list) ? list : []).filter((e) => waiting.delete(terminalOf(e)));
+}
+
+// A note about a terminal that has closed since: there is nowhere to go.
+export function isGone(note, terminals) {
+  const terminal = terminalOf(note);
+  return Boolean(terminal) && !(terminals ?? []).some((t) => t.address === terminal);
+}
+
+export function inboxRemove(list, id) {
+  return (Array.isArray(list) ? list : []).filter((e) => e.id !== id);
 }

@@ -3,7 +3,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
-import { stackTop } from "./model.js";
+import { stackTop, arrivals } from "./model.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -15,7 +15,7 @@ function find(node, id) {
 }
 
 // The sidebar's rail goes by its width, not a flag: dragging its edge narrows it too.
-const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
+const narrow = () => !shared("merdr.sidebar.slide") && (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
 
 // To the rail (on macOS wide enough for the traffic lights), or back to the width it had.
 function toggleSidebar() {
@@ -83,12 +83,11 @@ function icon(p, size, color) {
 }
 
 export default class Agents extends View {
-  // Merdr: the sidebar's contents are sliding out (closing) or not yet in (opening).
-  out() { return shared("merdr.sidebar.out") === true; }
 
   init(_props, cx) {
     if (props()?.sortMenu) return;
     this.folded = new Set();
+    this.known = null; // rows seen settled, for the entrance of new ones
     // Each agent's last state and when it changed (ms), kept across restarts.
     try { this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}"); } catch { this.changed = {}; }
     if (!this.changed || typeof this.changed !== "object" || Array.isArray(this.changed)) this.changed = {};
@@ -221,6 +220,27 @@ export default class Agents extends View {
     // Idle: a ring; done: a dot.
     if (a.status === "idle") return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
     return div().size(7).mx(3).flex_none().rounded(4).bg(a.status === "done" ? color : t.dim + "00");
+  }
+
+  // Merdr: the rows that just appeared (see arrivals in model.js). They are drawn
+  // closed once, then marked settled, so GPUI animates them open natively.
+  arrive(ids, cx) {
+    const step = arrivals(this.known, ids);
+    this.known = step.known;
+    if (step.fresh.length) cx.timer.after(30, (cx) => { for (const id of step.fresh) this.known?.add(id); cx.notify(); });
+    return new Set(step.fresh);
+  }
+
+  // Merdr: a row's place in the list. A new one grows from nothing, pushing the
+  // rows below it down, while it slides in from the left.
+  slot(key, height, entering, child) {
+    return v_flex().id(`slot-${key}`).flex_none().h(entering ? 0 : height).overflow_hidden()
+      .transition("height", { duration: 220, easing: "ease-out" })
+      .child(v_flex().id(`slot-in-${key}`).flex_none()
+        .relative().left(entering ? -16 : 0).opacity(entering ? 0 : 1)
+        .transition("left", { duration: 260, delay: 60, easing: "ease-out" })
+        .transition("opacity", { duration: 260, delay: 60, easing: "ease-out" })
+        .child(child));
   }
 
   render(cx) {
@@ -442,19 +462,35 @@ export default class Agents extends View {
     }
     const slide = this.slide && div().id("agent-slide").absolute().left(8).right(8).h(this.slide.height).rounded(8).bg(t.selected)
       .top(this.slide.top).spring("top", { response: 220, damping: 0.9 });
+    // Merdr: each group's rows sit in a box whose height folds and unfolds it.
+    const fresh = this.arrive(list.map((a) => a.address), cx);
+    const member = (a, i) => {
+      const [first, ...subs] = withKids(a, i);
+      return [this.slot(`ag-${a.address}`, 30, fresh.has(a.address), first), ...subs];
+    };
+    const bodyHeight = (g) => g.members.reduce((h, a) => h + 30 + (this.folded.has(a.address) ? 0 : this.tree(all, a.address).length * 26), 0);
     const rows = collapsed
       ? list.flatMap(withKids)
-      : groups.flatMap((g) => [header(g), ...(this.folded.has(g.id) ? [] : g.members.flatMap(withKids))]);
+      : groups.flatMap((g) => [
+          this.slot(`head-${g.id}`, 30, g.members.every((a) => fresh.has(a.address)), header(g)),
+          v_flex().id(`body-${g.id}`).flex_none().overflow_hidden().h(this.folded.has(g.id) ? 0 : bodyHeight(g))
+            .transition("height", { duration: 220, easing: "ease-in-out" })
+            .children(g.members.flatMap(member)),
+        ]);
 
-    return v_flex()
-      .size_full()
+    // Merdr: while the sidebar opens or closes (shared "merdr.sidebar.slide": its
+    // full width) the island keeps that width, pinned to the column's right edge,
+    // so it leaves under the window's edge as the terminals take its place.
+    const ride = shared("merdr.sidebar.slide");
+    return v_flex().size_full().min_h(0).relative().child(v_flex()
+      .id("island")
       .min_h(0)
       .bg(t.chrome)
       .text_size(13)
       // Merdr: the upper half of the bottom island (merdr-chrome's footer draws its bottom).
       .rounded_t(10)
-      .relative().left(this.out() ? -24 : 0).opacity(this.out() ? 0 : 1)
-      .transition("left", { duration: 160, easing: "ease-in-out" }).transition("opacity", { duration: 160, easing: "ease-in-out" })
+      .when(Boolean(ride), (el) => el.absolute().top(0).bottom(0).right(0).w(ride))
+      .when(!ride, (el) => el.size_full())
       .when(!collapsed, (el) =>
         el.child(
           h_flex()
@@ -498,6 +534,6 @@ export default class Agents extends View {
                 .child("»"),
             ),
         ),
-      );
+      ));
   }
 }

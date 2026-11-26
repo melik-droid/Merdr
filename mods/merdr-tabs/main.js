@@ -1,7 +1,9 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, shared, setShared, layout, settings, nextCommand } from "herdr";
-import { stackTop } from "./model.js";
+import { stackTop, arrivals, slideWidth } from "./model.js";
+
+const SLIDE_MS = 260; // the sidebar's opening and closing
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -39,6 +41,10 @@ export default class Tabs extends View {
       }
     });
     this.pressed = null;
+    this.turn = 0; // sidebar toggles so far
+    this.known = null; // tabs seen settled, for the entrance of new ones
+    this.lastSlide = null; // where the selection last sat
+    this.sliding = false;
     this.scroll = ScrollHandle.new();
     this.widths = {}; // tab id -> measured width, for the sliding selection
     this.hoverTab = null;
@@ -69,26 +75,65 @@ export default class Tabs extends View {
     run(e.delta.y > 0 ? "tab.prev" : "tab.next");
   }
 
-  // Closing: the islands slide left and fade (shared "merdr.sidebar.out"), then the
-  // sidebar hides. Opening: it shows with them out, and they slide back in.
+  // The sidebar's column narrows to nothing (and back) a frame at a time, so the
+  // terminals grow into its place as it goes. Its islands keep their width and
+  // ride its right edge (shared "merdr.sidebar.slide": that width). A press while
+  // it is closing turns it round where it is.
   toggleSidebar(cx) {
-    if (find(layout(), "sidebar")?.hidden) {
-      setShared("merdr.sidebar.out", true);
+    const turn = ++this.turn;
+    const node = find(layout(), "sidebar");
+    if (!node) return;
+    const hidden = Boolean(node.hidden);
+    const full = shared("merdr.sidebar.slide") ?? (node.size?.px >= 160 ? node.size.px : 262);
+    const open = hidden || this.closing;
+    const from = hidden ? 1 : node.size?.px ?? full;
+    const to = open ? full : 1;
+    this.closing = !open;
+    this.sliding = true;
+    setShared("merdr.sidebar.slide", full);
+    if (hidden) {
+      run("layout.resize", { id: "sidebar", px: from });
       run("layout.show", { id: "sidebar" });
-      cx.timer.after(40, () => setShared("merdr.sidebar.out", false));
-    } else {
-      this.closing = true;
-      setShared("merdr.sidebar.out", true);
-      cx.timer.after(170, () => { run("layout.hide", { id: "sidebar" }); this.closing = false; });
     }
+    const start = Date.now();
+    const frame = () => {
+      if (turn !== this.turn) return;
+      const p = (Date.now() - start) / SLIDE_MS;
+      run("layout.resize", { id: "sidebar", px: slideWidth(from, to, p) });
+      if (p < 1) return cx.timer.after(16, frame);
+      if (!open) {
+        run("layout.hide", { id: "sidebar" });
+        run("layout.resize", { id: "sidebar", px: full }); // its width for next time
+      }
+      this.closing = false;
+      this.sliding = false;
+      setShared("merdr.sidebar.slide", null);
+    };
+    cx.timer.after(16, frame);
+  }
+
+  // The tabs that just appeared, in any space (see arrivals in model.js). They
+  // are drawn aside once, then marked settled, so GPUI slides them in natively.
+  arrive(ids, cx) {
+    const step = arrivals(this.known, ids);
+    this.known = step.known;
+    if (step.fresh.length) cx.timer.after(30, (cx) => { for (const id of step.fresh) this.known?.add(id); cx.notify(); });
+    return new Set(step.fresh);
   }
 
   render(cx) {
     const t = theme();
-    // A sidebar shown some other way (the palette, another key) must not stay slid out.
-    if (!this.closing && !this.healing && !find(layout(), "sidebar")?.hidden && shared("merdr.sidebar.out") === true) {
+    // A slide cut short (a reload, another way of showing the sidebar) must not
+    // leave it thin.
+    const side = find(layout(), "sidebar");
+    if (!this.sliding && !this.healing && side && !side.hidden && (shared("merdr.sidebar.slide") || side.size?.px < 44)) {
       this.healing = true;
-      cx.timer.after(60, () => { this.healing = false; if (!this.closing) setShared("merdr.sidebar.out", false); });
+      cx.timer.after(60, () => {
+        this.healing = false;
+        if (this.sliding) return;
+        run("layout.resize", { id: "sidebar", px: shared("merdr.sidebar.slide") ?? 262 });
+        setShared("merdr.sidebar.slide", null);
+      });
     }
     const space = spaces().find(p => p.active);
     const shown = space?.tabs ?? [];
@@ -96,7 +141,12 @@ export default class Tabs extends View {
     // Merdr: one selection background slides to the active tab. Its place is the
     // measured widths of the tabs before it, plus the 3px gaps; until every tab
     // has been measured, the tab keeps Herdr's own highlight.
-    const slide = active >= 0 ? stackTop(shown.map(c => this.widths[c.id]), active, 3) : null;
+    const fresh = this.arrive(spaces().flatMap(s => s.tabs.map(tab => tab.id)), cx);
+    // A tab not measured yet (just opened) has no place: the selection waits where
+    // it was, so it stays the same element and springs over once it is known.
+    const measured = active >= 0 ? stackTop(shown.map(c => this.widths[c.id]), active, 3) : null;
+    const slide = measured ?? (active >= 0 && fresh.size ? this.lastSlide : null);
+    if (measured) this.lastSlide = measured;
     const at = (i) => i + (slide ? 1 : 0); // the sliding background is the first child
     const selected = shown[active]?.id;
     if (selected !== this.selected || active !== this.selectedIndex) {
@@ -113,6 +163,7 @@ export default class Tabs extends View {
       const lead = panes().find(p => p.tab === c.id && p.program?.agent) ?? panes().find(p => p.tab === c.id);
       const program = lead?.program;
       const name = label(c, lead);
+      const entering = fresh.has(c.id);
       return h_flex().id(`tab-${c.id}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
         // A rename or status dot on this or an earlier tab can push the active one out.
         .on_size_change((size, cx) => {
@@ -123,7 +174,8 @@ export default class Tabs extends View {
           if (i <= active) this.scroll.scroll_to_item(at(active));
           if (changed || i <= active) cx.notify();
         })
-        .relative()
+        .relative().left(entering ? -18 : 0).opacity(entering ? 0 : 1)
+        .transition("left", { duration: 260, easing: "ease-out" }).transition("opacity", { duration: 260, easing: "ease-out" })
         .border(1).border_color(c.active && !slide ? edge : clear).when(!slide && c.active, el => el.bg(tint))
         .text_color(c.active ? t.foreground : t.muted)
         // Merdr: the hover background fades in and out (GPUI animates opacity, not color).

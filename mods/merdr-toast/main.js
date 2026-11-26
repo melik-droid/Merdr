@@ -56,6 +56,8 @@ export default class MerdrToast extends View {
               .text_size(12).text_color(t.foreground).cursor_pointer().hover(s => s.bg(t.hover))
               .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(command); this.copied = true; cx.notify(); })
               .child(this.copied ? "Copied" : "Copy")))),
-      );
+      )
+      // Clicking anywhere runs the action (an agent: go to it); say so.
+      .when(Boolean(p.action?.name), (el) => el.child(div().flex_none().text_size(12).text_color(t.accent).child("Go \u2192")));
   }
 }

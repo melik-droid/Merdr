@@ -47,7 +47,7 @@
           "size": {
             "px": 262
           },
-          "min": 44,
+          "min": 0,
           "max": 480,
           "resizable": false,
           "gap": 6,

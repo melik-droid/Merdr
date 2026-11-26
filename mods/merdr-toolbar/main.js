@@ -73,7 +73,7 @@ export default class MerdrToolbar extends View {
   // The inbox bell, with a count of notifications since the list was last opened.
   bell(t) {
     const unread = unreadCount(shared("merdr.inbox"), shared("merdr.inbox.seen"));
-    return this.button(t, "inbox", asset("bell"), () => openOverlay({ mod: "merdr-inbox", kind: "popup", width: 320, height: 380 }))
+    return this.button(t, "inbox", asset("bell"), () => openOverlay({ mod: "merdr-inbox", kind: "popup", width: 340, height: 420 }))
       .relative()
       .when(unread > 0, (el) => el.child(div().absolute().top(0).right(-1).min_w(14).h(14).px(3).rounded_full()
         .bg(t.accent).text_color(t.accent_foreground).text_size(9.5).font_bold().flex().items_center().justify_center()
@@ -83,7 +83,9 @@ export default class MerdrToolbar extends View {
   // The window's ground under the toolbar, with the space's color washed into it
   // behind its name. The layout paints no ground here: this is the only layer.
   ground(t, color) {
-    const strips = washStrips(t.canvas, color, settings()?.dark ? 0.42 : 0.3);
+    // Strips 3 physical pixels wide on a 2x screen: each differs from the next by
+    // a step too small to see (wider ones show as bands, worst in dark).
+    const strips = washStrips(t.canvas, color, settings()?.dark ? 0.42 : 0.3, { step: 1.5 / (settings()?.zoom || 1) });
     return h_flex().absolute().top(0).left(0).right(0).bottom(0)
       .children(strips.map((s) => div().w(s.width).h_full().flex_none().bg(s.color)))
       .child(div().flex_1().h_full().bg(t.canvas));

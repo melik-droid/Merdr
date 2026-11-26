@@ -6,7 +6,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
 import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
-import { stackTop } from "./model.js";
+import { stackTop, arrivals } from "./model.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -18,7 +18,7 @@ function find(node, id) {
 }
 
 // The sidebar's rail goes by its width, not a flag: dragging its edge narrows it too.
-const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
+const narrow = () => !shared("merdr.sidebar.slide") && (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
 
 // Where a space is now: its first terminal's live folder, else where it was made.
 // `ps`: panes(), read once by the caller (each read copies every pane).
@@ -80,6 +80,7 @@ export function tone(t, status) {
 
 export default class Spaces extends View {
   init(_props, cx) {
+    this.known = null; // rows seen settled, for the entrance of new ones
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
     this.checked = {}; // where() -> when it was last looked at
     this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
@@ -352,9 +353,31 @@ export default class Spaces extends View {
   }
 
   // The rows, under a header per machine once one isn't this computer.
-  grouped(t, collapsed) {
+  // Merdr: the rows that just appeared (see arrivals in model.js). They are drawn
+  // closed once, then marked settled, so GPUI animates them open natively.
+  arrive(ids, cx) {
+    const step = arrivals(this.known, ids);
+    this.known = step.known;
+    if (step.fresh.length) cx.timer.after(30, (cx) => { for (const id of step.fresh) this.known?.add(id); cx.notify(); });
+    return new Set(step.fresh);
+  }
+
+  // Merdr: a row's place in the list. A new one grows from nothing, pushing the
+  // rows below it down, while it slides in from the left.
+  slot(key, height, entering, child) {
+    return v_flex().id(`slot-${key}`).flex_none().h(entering ? 0 : height).overflow_hidden()
+      .transition("height", { duration: 220, easing: "ease-out" })
+      .child(v_flex().id(`slot-in-${key}`).flex_none()
+        .relative().left(entering ? -16 : 0).opacity(entering ? 0 : 1)
+        .transition("left", { duration: 260, delay: 60, easing: "ease-out" })
+        .transition("opacity", { duration: 260, delay: 60, easing: "ease-out" })
+        .child(child));
+  }
+
+  grouped(t, collapsed, cx) {
     const rows = this.ordered();
-    const draw = (r) => (collapsed ? this.compact(r, t) : this.row(r, t));
+    const fresh = this.arrive(rows.map((r) => r.w.id), cx);
+    const draw = (r) => (collapsed ? this.compact(r, t) : this.slot(r.w.id, rowHeight(r), fresh.has(r.w.id), this.row(r, t)));
     // Where the active space's row lands among the children this returns: the list scrolls by its direct
     // children, and machine headers, login notes and loading rows count too.
     this.activeAt = -1;
@@ -547,7 +570,7 @@ export default class Spaces extends View {
       .child(div().absolute().right(5).text_color(tone(t, w.status)).child(glyph(w.status))));
   }
 
-  render() {
+  render(cx) {
     const t = theme();
     const collapsed = narrow();
     const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
@@ -562,7 +585,7 @@ export default class Spaces extends View {
       changed = true;
     }
     if (changed) setShared("space.colors", kept);
-    const list = this.grouped(t, collapsed);
+    const list = this.grouped(t, collapsed, cx);
     // Bring the active space into view when it, or its place in the list, changes; a row already in view stays put.
     const active = sp.find(p => p.active)?.id;
     if (active !== this.revealed || this.activeAt !== this.revealedAt) {
@@ -573,12 +596,14 @@ export default class Spaces extends View {
     // The sliding selection is the list's first child, behind the rows.
     const slide = this.slide && div().id("space-slide").absolute().left(8).right(8).h(this.slide.height).rounded(8).bg(t.selected)
       .top(this.slide.top).spring("top", { response: 220, damping: 0.9 });
-    // Merdr: the top island, sliding with the sidebar.
-    const out = shared("merdr.sidebar.out") === true;
-    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
+    // Merdr: while the sidebar opens or closes (shared "merdr.sidebar.slide": its
+    // full width) the island keeps that width, pinned to the column's right edge,
+    // so it leaves under the window's edge as the terminals take its place.
+    const ride = shared("merdr.sidebar.slide");
+    return v_flex().size_full().min_h(0).relative().child(v_flex().id("island").min_h(0).bg(t.chrome).text_size(13)
       .rounded(10).pt(4)
-      .relative().left(out ? -24 : 0).opacity(out ? 0 : 1)
-      .transition("left", { duration: 160, easing: "ease-in-out" }).transition("opacity", { duration: 160, easing: "ease-in-out" })
+      .when(Boolean(ride), (el) => el.absolute().top(0).bottom(0).right(0).w(ride))
+      .when(!ride, (el) => el.size_full())
       .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
         .when(collapsed, el => el.pl(0).pr(0).justify_center())
         .when(!collapsed, el => el.child("Spaces"))
@@ -588,6 +613,6 @@ export default class Spaces extends View {
         // A block above (another mod's) growing, or the window resizing, shrinks this list and can push the active space out.
         .on_size_change((_size, cx) => { if (this.activeAt >= 0) { this.scroll.scroll_to_item(this.activeAt + (this.slide ? 1 : 0)); cx.notify(); } })
         .on_mouse_up("left", (_e, cx) => { this.pressed = null; cx.notify(); })
-        .children(slide ? [slide, ...list] : list));
+        .children(slide ? [slide, ...list] : list)));
   }
 }

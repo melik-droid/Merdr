@@ -29,13 +29,16 @@ for d in "$HOME_DIR"/mods/merdr-*/; do
 	[ -e "$d/.merdr-owned" ] || continue
 	rm -rf "$d" && say "removed mods/$(basename "$d")"
 done
-for marker in "$HOME_DIR"/themes/.merdr-owned-*.json; do
+# Markers carry no .json; earlier installs named them with it.
+for marker in "$HOME_DIR"/themes/.merdr-owned-*; do
 	[ -e "$marker" ] || continue
 	n=${marker##*/.merdr-owned-}
-	rm -f "$HOME_DIR/themes/$n" "$marker" && say "removed themes/$n"
+	n=${n%.json}
+	rm -f "$HOME_DIR/themes/$n.json" "$marker" && say "removed themes/$n.json"
 done
-if [ -e "$HOME_DIR/layouts/.merdr-owned-merdr.json" ]; then
-	rm -f "$HOME_DIR/layouts/merdr.json" "$HOME_DIR/layouts/.merdr-owned-merdr.json" && say "removed layouts/merdr.json"
+if [ -e "$HOME_DIR/layouts/.merdr-owned-merdr" ] || [ -e "$HOME_DIR/layouts/.merdr-owned-merdr.json" ]; then
+	rm -f "$HOME_DIR/layouts/merdr.json" "$HOME_DIR/layouts/.merdr-owned-merdr" "$HOME_DIR/layouts/.merdr-owned-merdr.json" \
+		&& say "removed layouts/merdr.json"
 fi
 
 if [ -f "$HOME_DIR/keys.json" ] && [ -f "$SRC/keys.json" ]; then

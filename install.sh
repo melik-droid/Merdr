@@ -58,13 +58,16 @@ done
 # Check everything first, so a refusal writes nothing.
 refuse=0
 taken() { echo "merdr: $1 exists and was not installed by Merdr; leaving it alone" >&2; refuse=1; }
-[ -e "$HOME_DIR/layouts/merdr.json" ] && [ ! -e "$HOME_DIR/layouts/.merdr-owned-merdr.json" ] && taken "$HOME_DIR/layouts/merdr.json"
+# Markers of layouts and themes carry no .json: Herdr lists every *.json there.
+# (Earlier installs named them with it; those still count and are renamed.)
+owned() { [ -e "$1/.merdr-owned-$2" ] || [ -e "$1/.merdr-owned-$2.json" ]; }
+[ -e "$HOME_DIR/layouts/merdr.json" ] && ! owned "$HOME_DIR/layouts" merdr && taken "$HOME_DIR/layouts/merdr.json"
 for m in $MODS; do
 	[ -e "$HOME_DIR/mods/$m" ] && [ ! -e "$HOME_DIR/mods/$m/.merdr-owned" ] && taken "$HOME_DIR/mods/$m"
 done
 for t in "$SRC"/themes/*.json; do
 	n=$(basename "$t")
-	[ -e "$HOME_DIR/themes/$n" ] && [ ! -e "$HOME_DIR/themes/.merdr-owned-$n" ] && taken "$HOME_DIR/themes/$n"
+	[ -e "$HOME_DIR/themes/$n" ] && ! owned "$HOME_DIR/themes" "${n%.json}" && taken "$HOME_DIR/themes/$n"
 done
 [ "$refuse" -eq 0 ] || exit 1
 
@@ -81,12 +84,14 @@ done
 for t in "$SRC"/themes/*.json; do
 	n=$(basename "$t")
 	cp "$t" "$HOME_DIR/themes/$n.merdr-new" && mv "$HOME_DIR/themes/$n.merdr-new" "$HOME_DIR/themes/$n" || exit 1
-	: > "$HOME_DIR/themes/.merdr-owned-$n"
+	: > "$HOME_DIR/themes/.merdr-owned-${n%.json}"
+	rm -f "$HOME_DIR/themes/.merdr-owned-$n"
 	say "installed themes/$n"
 done
 cp "$SRC/layouts/merdr.json" "$HOME_DIR/layouts/merdr.json.merdr-new" \
 	&& mv "$HOME_DIR/layouts/merdr.json.merdr-new" "$HOME_DIR/layouts/merdr.json" || exit 1
-: > "$HOME_DIR/layouts/.merdr-owned-merdr.json"
+: > "$HOME_DIR/layouts/.merdr-owned-merdr"
+rm -f "$HOME_DIR/layouts/.merdr-owned-merdr.json"
 say "installed layouts/merdr.json"
 
 # keys.json: add each section of the package's keys.json the person doesn't have.
